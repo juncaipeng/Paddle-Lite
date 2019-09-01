@@ -343,6 +343,14 @@ void MulticlassNmsCompute::Run() {
         out, result_corrected.data(), sizeof(float) * result_corrected.size());
     param.out->set_lod(lod);
   }
+
+  std::fstream out_file("/data/local/tmp/pjc/nms.txt");
+  out_file << param.out->dims();
+  auto* out_data = param.out->data<float>();
+  for (int i = 0; i < param.out->numel(); i++) {
+    out_file << out_data[i] << "\n";
+  }
+  out_file.close();
 }
 
 }  // namespace host

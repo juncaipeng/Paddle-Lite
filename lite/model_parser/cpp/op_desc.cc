@@ -97,6 +97,7 @@ std::vector<std::string> OpDesc::Input(const std::string& param) const {
 }
 
 std::vector<std::string> OpDesc::Output(const std::string& param) const {
+  LOG(INFO) << "Type:" << type_;
   auto it = outputs_.find(param);
   CHECK(it != outputs_.end());
   return it->second;

@@ -57,7 +57,6 @@ void BoxClipCompute::Run() {
   if (input->lod().size() > 1) {
     LOG(FATAL) << "Only support 0 and 1 level of LoD.";
   }
-
   auto box_lod = input->lod().back();
   int64_t n = static_cast<int64_t>(box_lod.size() - 1);
   for (int i = 0; i < n; ++i) {
