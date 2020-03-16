@@ -1134,6 +1134,14 @@ struct GridSamplerParam {
   lite::Tensor* grid{};
 };
 
+struct CrfDecodingParam {
+  lite::Tensor* emission{};
+  lite::Tensor* transition{};
+  lite::Tensor* label{};
+  lite::Tensor* length{};
+  lite::Tensor* viterbi_path{};
+};
+
 }  // namespace operators
 }  // namespace lite
 }  // namespace paddle
