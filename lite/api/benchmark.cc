@@ -39,6 +39,7 @@ DEFINE_string(param_filename,
               "",
               "the filename of param file, set param_file when the model is "
               "combined formate.");
+DEFINE_string(input_dir, "", "input dir");
 DEFINE_string(input_shape,
               "1,3,224,224",
               "set input shapes according to the model, "
@@ -84,6 +85,7 @@ void OutputOptModel(const std::string& save_optimized_model_dir) {
   }
   std::vector<Place> vaild_places = {
       Place{TARGET(kARM), PRECISION(kFloat)},
+      Place{TARGET(kARM), PRECISION(kInt32)},
   };
   config.set_valid_places(vaild_places);
   auto predictor = lite_api::CreatePaddlePredictor(config);
@@ -110,63 +112,86 @@ void Run(const std::vector<int64_t>& input_shape,
   config.set_power_mode(static_cast<PowerMode>(FLAGS_power_mode));
   config.set_model_from_file(model_dir + ".nb");
 
+  // load model and input
   auto predictor = lite_api::CreatePaddlePredictor(config);
-
-  // set input
   auto input_tensor = predictor->GetInput(0);
   input_tensor->Resize(input_shape);
   auto input_data = input_tensor->mutable_data<float>();
   int input_num = 1;
-  for (size_t i = 0; i < input_shape.size(); ++i) {
+  LOG(INFO) << "input shape:";
+  for (int i = 0; i < input_shape.size(); ++i) {
+    LOG(INFO) << input_shape[i];
     input_num *= input_shape[i];
   }
-  if (FLAGS_input_img_path.empty()) {
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
-    }
-  } else {
-    std::fstream fs(FLAGS_input_img_path);
+
+  // test loop
+  int total_imgs = 500;
+  float test_num = 0;
+  float top1_num = 0;
+  float top5_num = 0;
+  int output_len = 1000;
+  std::vector<int> index(1000);
+  bool debug = false;
+  int show_step = 500;
+  for (int i = 0; i < total_imgs; i++) {
+    // set input
+    std::string filename = FLAGS_input_dir + "/" + lite::to_string(i);
+    std::ifstream fs(filename, std::ifstream::binary);
     if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
+      LOG(FATAL) << "open input file fail.";
     }
-    for (int i = 0; i < input_num; i++) {
-      fs >> input_data[i];
+    auto input_data_tmp = input_data;
+    for (int i = 0; i < input_num; ++i) {
+      fs.read(reinterpret_cast<char*>(input_data_tmp), sizeof(*input_data_tmp));
+      input_data_tmp++;
     }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
-  }
+    int label = 0;
+    fs.read(reinterpret_cast<char*>(&label), sizeof(label));
+    fs.close();
 
-  // warmup
-  for (int i = 0; i < FLAGS_warmup; ++i) {
+    if (debug && i % show_step == 0) {
+      LOG(INFO) << "input data:";
+      LOG(INFO) << input_data[0] << " " << input_data[10] << " "
+                << input_data[input_num - 1];
+      LOG(INFO) << "label:" << label;
+    }
+
+    // run
     predictor->Run();
-  }
+    auto output0 = predictor->GetOutput(0);
+    auto output0_data = output0->data<float>();
 
-  // run
-  std::vector<float> perf_vct;
-  for (int i = 0; i < FLAGS_repeats; ++i) {
-    auto start = GetCurrentUS();
-    predictor->Run();
-    auto end = GetCurrentUS();
-    perf_vct.push_back((end - start) / 1000.0);
-  }
-  std::sort(perf_vct.begin(), perf_vct.end());
-  float min_res = perf_vct.back();
-  float max_res = perf_vct.front();
-  float total_res = accumulate(perf_vct.begin(), perf_vct.end(), 0.0);
-  float avg_res = total_res / FLAGS_repeats;
+    // get output
+    std::iota(index.begin(), index.end(), 0);
+    std::sort(index.begin(), index.end(), [output0_data](size_t i1, size_t i2) {
+      return output0_data[i1] > output0_data[i2];
+    });
+    test_num++;
+    if (label == index[0]) {
+      top1_num++;
+    }
+    for (int i = 0; i < 5; i++) {
+      if (label == index[i]) {
+        top5_num++;
+      }
+    }
 
-  // save result
-  std::ofstream ofs(FLAGS_result_filename, std::ios::app);
-  if (!ofs.is_open()) {
-    LOG(FATAL) << "open result file failed";
+    if (debug && i % show_step == 0) {
+      LOG(INFO) << index[0] << " " << index[1] << " " << index[2] << " "
+                << index[3] << " " << index[4];
+      LOG(INFO) << output0_data[index[0]] << " " << output0_data[index[1]]
+                << " " << output0_data[index[2]] << " "
+                << output0_data[index[3]] << " " << output0_data[index[4]];
+      LOG(INFO) << output0_data[630];
+    }
+    if (i % show_step == 0) {
+      LOG(INFO) << "step " << i << "; top1 acc:" << top1_num / test_num
+                << "; top5 acc:" << top5_num / test_num;
+    }
   }
-  ofs.precision(5);
-  ofs << std::setw(30) << std::fixed << std::left << model_name;
-  ofs << "min = " << std::setw(12) << min_res;
-  ofs << "max = " << std::setw(12) << max_res;
-  ofs << "average = " << std::setw(12) << avg_res;
-  ofs << std::endl;
-  ofs.close();
+  LOG(INFO) << "final result:";
+  LOG(INFO) << "top1 acc:" << top1_num / test_num;
+  LOG(INFO) << "top5 acc:" << top5_num / test_num;
 }
 #endif
 
