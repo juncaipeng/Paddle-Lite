@@ -276,6 +276,7 @@ void Instruction::Run() {
 #endif
   CHECK(op_) << "op null";
   CHECK(kernel_) << "kernel null";
+  LOG(INFO) << "start run " << op_->Type();
 
   if (first_epoch_) {
     first_epoch_ = false;
@@ -289,6 +290,7 @@ void Instruction::Run() {
   op_->InferShape();
   kernel_->Launch();
   has_run_ = true;
+  LOG(INFO) << "finish run " << op_->Type();
 }
 
 STL::ostream& operator<<(STL::ostream& os, const Instruction& other) {

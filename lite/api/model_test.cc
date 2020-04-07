@@ -75,24 +75,25 @@ void Run(const std::vector<std::vector<int64_t>>& input_shapes,
   config.set_threads(thread_num);
 
   auto predictor = lite_api::CreatePaddlePredictor(config);
+  LOG(INFO) << "load model ok";
 
-  for (int j = 0; j < input_shapes.size(); ++j) {
-    auto input_tensor = predictor->GetInput(j);
-    input_tensor->Resize(input_shapes[j]);
-    auto input_data = input_tensor->mutable_data<float>();
-    int input_num = 1;
-    for (int i = 0; i < input_shapes[j].size(); ++i) {
-      input_num *= input_shapes[j][i];
-    }
-
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
-    }
+  auto input_tensor = predictor->GetInput(0);
+  input_tensor->Resize({42, 1});
+  std::vector<std::vector<uint64_t>> lod;
+  lod.push_back({0, 42});
+  input_tensor->SetLoD(lod);
+  auto input_data = input_tensor->mutable_data<int64_t>();
+  // std::vector<int> values = {4851, 2493, 3270,  576, 2193, 7932, 5168, 2897,
+  // 997, 1316};
+  std::vector<int> values = {
+      3023, 1125, 7076, 706,  1883, 7091, 7699, 11,   3233, 1725, 3047,
+      5733, 7072, 2498, 6094, 600,  738,  1125, 11,   3729, 1895, 4772,
+      4459, 2881, 2538, 4853, 6240, 983,  1732, 693,  2251, 2410, 5493,
+      3354, 666,  585,  2419, 6449, 6840, 4853, 2873, 5326};
+  for (size_t i = 0; i < values.size(); i++) {
+    input_data[i] = values[i];
   }
-
-  for (int i = 0; i < warmup_times; ++i) {
-    predictor->Run();
-  }
+  LOG(INFO) << "set input ok";
 
   Timer ti;
   for (int j = 0; j < repeat; ++j) {
@@ -112,15 +113,18 @@ void Run(const std::vector<std::vector<int64_t>>& input_shapes,
             << ", max time: " << ti.LapTimes().Max() << " ms.";
 
   auto output = predictor->GetOutput(0);
-  auto out = output->data<float>();
-  LOG(INFO) << "out " << out[0];
-  LOG(INFO) << "out " << out[1];
   auto output_shape = output->shape();
   int output_num = 1;
-  for (int i = 0; i < output_shape.size(); ++i) {
+  LOG(INFO) << "output shape: ";
+  for (size_t i = 0; i < output_shape.size(); ++i) {
     output_num *= output_shape[i];
+    LOG(INFO) << output_shape[i];
   }
-  LOG(INFO) << "output_num: " << output_num;
+  auto out_data = output->data<int64_t>();
+  LOG(INFO) << "output data:";
+  for (int i = 0; i < output_num; i++) {
+    LOG(INFO) << out_data[i];
+  }
 
   // please turn off memory_optimize_pass to use this feature.
   if (FLAGS_arg_name != "") {

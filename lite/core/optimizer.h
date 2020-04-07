@@ -117,10 +117,9 @@ class Optimizer {
 
            "runtime_context_assign_pass",
            "argument_type_display_pass",
-           "memory_optimize_pass"}};
-      if (passes.size() == 1) {
-        passes_local.push_back(passes[0]);
-      }
+           // "memory_optimize_pass",
+           "npu_subgraph_pass",
+           "xpu_subgraph_pass"}};
       RunPasses(passes_local);
     } else {
       RunPasses(passes);
