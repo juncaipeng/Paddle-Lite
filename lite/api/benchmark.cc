@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 #include "lite/api/paddle_api.h"
+#include "lite/api/paddle_use_kernels.h"
+#include "lite/api/paddle_use_ops.h"
 #include "lite/core/device_info.h"
 #include "lite/utils/cp_logging.h"
 #include "lite/utils/string.h"
@@ -127,80 +129,88 @@ void Run(const std::vector<int64_t>& input_shape,
   config.set_power_mode(static_cast<PowerMode>(FLAGS_power_mode));
   config.set_model_from_file(model_path);
 
+  // load model and input
   auto predictor = lite_api::CreatePaddlePredictor(config);
-
-  // set input
   auto input_tensor = predictor->GetInput(0);
   input_tensor->Resize(input_shape);
   auto input_data = input_tensor->mutable_data<float>();
-  int64_t input_num = ShapeProduction(input_shape);
-  if (FLAGS_input_img_path.empty()) {
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
-    }
-  } else {
-    std::fstream fs(FLAGS_input_img_path);
-    if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
-    }
-    for (int i = 0; i < input_num; i++) {
-      fs >> input_data[i];
-    }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
+
+  int input_num = 1;
+  LOG(INFO) << "input shape:";
+  for (int i = 0; i < input_shape.size(); ++i) {
+    LOG(INFO) << input_shape[i];
+    input_num *= input_shape[i];
   }
 
-  // warmup
-  for (int i = 0; i < FLAGS_warmup; ++i) {
+  std::ifstream ifs(FLAGS_input_img_path, std::ifstream::binary);
+  if (!ifs.is_open()) {
+    LOG(FATAL) << "open input file fail.";
+  }
+  int64_t total_imgs{0};
+  ifs.read(reinterpret_cast<char*>(&total_imgs), sizeof(total_imgs));
+  LOG(INFO) << "total_imgs" << total_imgs;
+
+  // test loop
+  float test_num = 0;
+  float top1_num = 0;
+  float top5_num = 0;
+  int output_len = 1000;
+  std::vector<int> index(1000);
+  bool debug = true;
+  int show_step = 500;
+  for (int i = 0; i < total_imgs; i++) {
+    // set input
+    ifs.read(reinterpret_cast<char*>(input_data),
+             sizeof(float) * 1 * 3 * 224 * 224);
+    int64_t label = 0;
+    ifs.read(reinterpret_cast<char*>(&label), sizeof(label));
+
+    if (debug && i % show_step == 0) {
+      LOG(INFO) << "input data:";
+      LOG(INFO) << input_data[0] << " " << input_data[10] << " "
+                << input_data[input_num - 1];
+      LOG(INFO) << "label:" << label;
+    }
+
+    // run
     predictor->Run();
-  }
+    auto output0 = predictor->GetOutput(0);
+    auto output0_data = output0->data<float>();
 
-  // run
-  std::vector<float> perf_vct;
-  for (int i = 0; i < FLAGS_repeats; ++i) {
-    auto start = GetCurrentUS();
-    predictor->Run();
-    auto end = GetCurrentUS();
-    perf_vct.push_back((end - start) / 1000.0);
-  }
-  std::stable_sort(perf_vct.begin(), perf_vct.end());
-  float min_res = perf_vct.back();
-  float max_res = perf_vct.front();
-  float total_res = accumulate(perf_vct.begin(), perf_vct.end(), 0.0);
-  float avg_res = total_res / FLAGS_repeats;
+    // get output
+    std::iota(index.begin(), index.end(), 0);
+    std::sort(index.begin(), index.end(), [output0_data](size_t i1, size_t i2) {
+      return output0_data[i1] > output0_data[i2];
+    });
 
-  // save result
-  std::ofstream ofs(FLAGS_result_filename, std::ios::app);
-  if (!ofs.is_open()) {
-    LOG(FATAL) << "open result file failed";
-  }
-  ofs.precision(5);
-  ofs << std::setw(30) << std::fixed << std::left << model_name;
-  ofs << "min = " << std::setw(12) << min_res;
-  ofs << "max = " << std::setw(12) << max_res;
-  ofs << "average = " << std::setw(12) << avg_res;
-  ofs << std::endl;
-  ofs.close();
-
-  if (FLAGS_show_output) {
-    auto out_tensor = predictor->GetOutput(0);
-    auto* out_data = out_tensor->data<float>();
-    int64_t output_num = ShapeProduction(out_tensor->shape());
-    float max_value = out_data[0];
-    int max_index = 0;
-    for (int i = 0; i < output_num; i++) {
-      if (max_value < out_data[i]) {
-        max_value = out_data[i];
-        max_index = i;
+    // get accuracy
+    test_num++;
+    if (label == index[0]) {
+      top1_num++;
+    }
+    for (int i = 0; i < 5; i++) {
+      if (label == index[i]) {
+        top5_num++;
       }
     }
-    LOG(INFO) << "max_value:" << max_value;
-    LOG(INFO) << "max_index:" << max_index;
-    LOG(INFO) << "output data[0:10]:";
-    for (int i = 0; i < 10; i++) {
-      LOG(INFO) << out_data[i];
+
+    if (debug && i % show_step == 0) {
+      LOG(INFO) << index[0] << " " << index[1] << " " << index[2] << " "
+                << index[3] << " " << index[4];
+      LOG(INFO) << output0_data[index[0]] << " " << output0_data[index[1]]
+                << " " << output0_data[index[2]] << " "
+                << output0_data[index[3]] << " " << output0_data[index[4]];
+      LOG(INFO) << output0_data[630];
+    }
+    if (i % show_step == 0) {
+      LOG(INFO) << "step " << i << "; top1 acc:" << top1_num / test_num
+                << "; top5 acc:" << top5_num / test_num;
     }
   }
+  ifs.close();
+  LOG(INFO) << "final result:";
+  LOG(INFO) << "top1 acc:" << top1_num / test_num;
+  LOG(INFO) << "top5 acc:" << top5_num / test_num;
 }
 #endif
 
