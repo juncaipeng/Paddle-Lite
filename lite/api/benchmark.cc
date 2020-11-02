@@ -130,25 +130,32 @@ void Run(const std::vector<int64_t>& input_shape,
   auto predictor = lite_api::CreatePaddlePredictor(config);
 
   // set input
-  auto input_tensor = predictor->GetInput(0);
-  input_tensor->Resize(input_shape);
-  auto input_data = input_tensor->mutable_data<float>();
-  int64_t input_num = ShapeProduction(input_shape);
-  if (FLAGS_input_img_path.empty()) {
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
-    }
-  } else {
-    std::fstream fs(FLAGS_input_img_path);
-    if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
-    }
-    for (int i = 0; i < input_num; i++) {
-      fs >> input_data[i];
-    }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
+  auto src_ids = predictor->GetInput(0);
+  src_ids->Resize({1, 256});
+  auto src_ids_data = src_ids->mutable_data<int64_t>();
+  std::vector<int64_t> data = {5680,
+                               17043,
+                               4351,
+                               7573,
+                               16575,
+                               3573,
+                               32944,
+                               12210,
+                               18834,
+                               28957,
+                               15319,
+                               2018,
+                               21673,
+                               30598};
+  for (int i = 0; i < 242; i++) {
+    data.emplace_back(0);
   }
+  memcpy(src_ids_data, data.data(), sizeof(int64_t) * 256);
+
+  auto seq_len = predictor->GetInput(1);
+  seq_len->Resize({1});
+  auto seq_len_data = seq_len->mutable_data<int64_t>();
+  seq_len_data[0] = 14;
 
   // warmup
   for (int i = 0; i < FLAGS_warmup; ++i) {
