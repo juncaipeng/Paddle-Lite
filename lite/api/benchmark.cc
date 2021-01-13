@@ -16,11 +16,14 @@
 #if !defined(_WIN32)
 #include <sys/time.h>
 #else
+#define NOMINMAX  // msvc max/min macro conflict with std::min/max
+#include <windows.h>
 #include "lite/backends/x86/port.h"
 #endif
 #define GLOG_NO_ABBREVIATED_SEVERITIES  // msvc conflict logging with windows.h
 #include <time.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
@@ -56,6 +59,7 @@ DEFINE_string(input_img_path,
               "",
               "the path of input image, if not set "
               "input_img_path, the input of model will be 1.0.");
+DEFINE_int32(test_img_num, -1, "");
 DEFINE_int32(warmup, 0, "warmup times");
 DEFINE_int32(repeats, 1, "repeats times");
 DEFINE_int32(power_mode,
@@ -115,7 +119,6 @@ int64_t ShapeProduction(const std::vector<int64_t>& shape) {
   return num;
 }
 
-#ifdef LITE_WITH_LIGHT_WEIGHT_FRAMEWORK
 void Run(const std::vector<int64_t>& input_shape,
          const std::string& model_path,
          const std::string model_name) {
@@ -127,80 +130,121 @@ void Run(const std::vector<int64_t>& input_shape,
 
   auto predictor = lite_api::CreatePaddlePredictor(config);
 
-  // set input
-  auto input_tensor = predictor->GetInput(0);
-  input_tensor->Resize(input_shape);
-  auto input_data = input_tensor->mutable_data<float>();
-  int64_t input_num = ShapeProduction(input_shape);
-  if (FLAGS_input_img_path.empty()) {
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
+  // prepare
+  std::ifstream fs(FLAGS_input_img_path);
+  if (!fs.is_open()) {
+    LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
+  }
+  int img_nums = 0;
+  fs >> img_nums;
+  std::cout << "all img num:" << img_nums << std::endl;
+
+  // loop
+  double all_time = 0;
+  int class_right_num = 0;
+  int ctc_right_num = 0;
+  for (int i = 0; i < img_nums; i++) {
+    if (i % 10 == 0) {
+      std::cout << "iter:" << i << std::endl;
     }
-  } else {
-    std::fstream fs(FLAGS_input_img_path);
-    if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
+    if (FLAGS_test_img_num > 0 && i > FLAGS_test_img_num) {
+      break;
     }
-    for (int i = 0; i < input_num; i++) {
+
+    // set input
+    int64_t input_h, input_w;
+    fs >> input_h >> input_w;
+    auto input_tensor = predictor->GetInput(0);
+    input_tensor->Resize({input_h, input_w});
+    auto input_data = input_tensor->mutable_data<float>();
+    for (int i = 0; i < input_h * input_w; i++) {
       fs >> input_data[i];
     }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
-  }
+    /*
+    LOG(INFO) << "input data:" << input_data[0]
+      << " " << input_data[input_h * input_w - 1];
+    */
 
-  // warmup
-  for (int i = 0; i < FLAGS_warmup; ++i) {
-    predictor->Run();
-  }
+    uint64_t lod_data;
+    fs >> lod_data;
+    std::vector<std::vector<uint64_t>> lod;
+    lod.push_back({0, lod_data});
+    input_tensor->SetLoD(lod);
 
-  // run
-  std::vector<float> perf_vct;
-  for (int i = 0; i < FLAGS_repeats; ++i) {
+    for (int i = 0; i < FLAGS_warmup; i++) predictor->Run();
+
     auto start = GetCurrentUS();
-    predictor->Run();
+    for (int i = 0; i < FLAGS_repeats; i++) predictor->Run();
     auto end = GetCurrentUS();
-    perf_vct.push_back((end - start) / 1000.0);
-  }
-  std::stable_sort(perf_vct.begin(), perf_vct.end());
-  float min_res = perf_vct.back();
-  float max_res = perf_vct.front();
-  float total_res = accumulate(perf_vct.begin(), perf_vct.end(), 0.0);
-  float avg_res = total_res / FLAGS_repeats;
+    all_time += (end - start);
 
-  // save result
-  std::ofstream ofs(FLAGS_result_filename, std::ios::app);
-  if (!ofs.is_open()) {
-    LOG(FATAL) << "open result file failed";
-  }
-  ofs.precision(5);
-  ofs << std::setw(30) << std::fixed << std::left << model_name;
-  ofs << "min = " << std::setw(12) << min_res;
-  ofs << "max = " << std::setw(12) << max_res;
-  ofs << "average = " << std::setw(12) << avg_res;
-  ofs << std::endl;
-  ofs.close();
+    int gt_label;
+    fs >> gt_label;
+    // get output 0
+    {
+      // predict data
+      int idx = 0;
+      auto out = predictor->GetOutput(idx);
+      std::vector<int64_t> out_shape = out->shape();
+      int64_t out_num = ShapeProduction(out_shape);
+      auto* out_data = out->data<float>();
+      auto max_iter = std::max_element(out_data, out_data + out_num);
+      float max_value = *max_iter;
+      int max_idx = max_iter - out_data;
 
-  if (FLAGS_show_output) {
-    auto out_tensor = predictor->GetOutput(0);
-    auto* out_data = out_tensor->data<float>();
-    int64_t output_num = ShapeProduction(out_tensor->shape());
-    float max_value = out_data[0];
-    int max_index = 0;
-    for (int i = 0; i < output_num; i++) {
-      if (max_value < out_data[i]) {
-        max_value = out_data[i];
-        max_index = i;
+      if (max_idx == gt_label) {
+        class_right_num++;
+      }
+
+      /*
+      // gt data
+      int gt_h, gt_w;
+      fs >> gt_h >> gt_w;
+      CHECK(gt_h == out_shape[0] && gt_w == out_shape[1]);
+      int gt_num = gt_h * gt_w;
+      std::vector<float> gt_data(gt_num, 0);
+      for (int i = 0; i < gt_num; i++) {
+        fs >> gt_data[i];
+      }
+      auto gt_max_iter = std::max_element(gt_data.begin(), gt_data.end());
+      float gt_max_value = *gt_max_iter;
+      int gt_max_idx = gt_max_iter - gt_data.begin();
+      //CHECK_EQ(max_idx, gt_max_idx);
+      //CHECK_LT(std::abs(max_value - gt_max_value) < 0.1);
+      if (max_idx == gt_max_idx) {
+        class_right_num++;
+      }
+      LOG(INFO) << "gt max value:" << gt_max_value
+                << ", gt max index:" << gt_max_idx;
+      */
+    }
+
+    {
+      int idx = 1;
+      auto out = predictor->GetOutput(idx);
+      auto* out_data = out->data<int64_t>();
+      if (out_data[0] == gt_label) {
+        ctc_right_num++;
+      } else {
+        VLOG(1) << "label:" << gt_label << ", out_ctc:" << out_data[0];
       }
     }
-    LOG(INFO) << "max_value:" << max_value;
-    LOG(INFO) << "max_index:" << max_index;
-    LOG(INFO) << "output data[0:10]:";
-    for (int i = 0; i < 10; i++) {
-      LOG(INFO) << out_data[i];
-    }
   }
+  fs.close();
+
+  int real_test_img_num = img_nums;
+  if (FLAGS_test_img_num > 0) {
+    real_test_img_num = std::min(FLAGS_test_img_num, real_test_img_num);
+  }
+  all_time /= 1000.0;
+  LOG(INFO) << "class accuracy:"
+            << static_cast<float>(class_right_num) / real_test_img_num;
+  LOG(INFO) << "ctc accuracy:"
+            << static_cast<float>(ctc_right_num) / real_test_img_num;
+  LOG(INFO) << "all time:" << all_time << "ms";
+  LOG(INFO) << "avg time:" << all_time / (real_test_img_num * FLAGS_repeats)
+            << "ms";
 }
-#endif
 
 }  // namespace lite_api
 }  // namespace paddle
