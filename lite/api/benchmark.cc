@@ -80,6 +80,32 @@ inline double GetCurrentUS() {
   return 1e+6 * time.tv_sec + time.tv_usec;
 }
 
+template <class T>
+void ShowVector(const std::string& info, const std::vector<T>& vct) {
+  LOG(INFO) << info;
+
+  std::stringstream ss;
+  for (auto x : vct) {
+    ss << x << " ";
+  }
+  LOG(INFO) << ss.str();
+}
+
+// Read the nums in a line for txt file
+template <typename T>
+std::vector<T> ReadLineNums(std::istream& is) {
+  std::string line;
+  std::getline(is, line);
+  std::stringstream ss(line);
+
+  std::vector<T> res;
+  T x;
+  while (ss >> x) {
+    res.push_back(x);
+  }
+  return res;
+}
+
 void OutputOptModel(const std::string& save_optimized_model_dir) {
   lite_api::CxxConfig config;
   config.set_model_dir(FLAGS_model_dir);
@@ -115,7 +141,6 @@ int64_t ShapeProduction(const std::vector<int64_t>& shape) {
   return num;
 }
 
-#ifdef LITE_WITH_LIGHT_WEIGHT_FRAMEWORK
 void Run(const std::vector<int64_t>& input_shape,
          const std::string& model_path,
          const std::string model_name) {
@@ -128,24 +153,30 @@ void Run(const std::vector<int64_t>& input_shape,
   auto predictor = lite_api::CreatePaddlePredictor(config);
 
   // set input
-  auto input_tensor = predictor->GetInput(0);
-  input_tensor->Resize(input_shape);
-  auto input_data = input_tensor->mutable_data<float>();
-  int64_t input_num = ShapeProduction(input_shape);
   if (FLAGS_input_img_path.empty()) {
-    for (int i = 0; i < input_num; ++i) {
-      input_data[i] = 1.f;
-    }
+    LOG(FATAL) << "set input data path";
   } else {
     std::fstream fs(FLAGS_input_img_path);
     if (!fs.is_open()) {
       LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
     }
-    for (int i = 0; i < input_num; i++) {
-      fs >> input_data[i];
+    for (int i = 0; i < 2; i++) {
+      std::vector<int64_t> input_shape = ReadLineNums<int64_t>(fs);
+      std::vector<int64_t> input_data = ReadLineNums<int64_t>(fs);
+      ShowVector("input_shape:", input_shape);
+      ShowVector("input_data:", input_data);
+
+      auto input_tensor = predictor->GetInput(i);
+      input_tensor->Resize(input_shape);
+      auto input_data_ptr = input_tensor->mutable_data<int64_t>();
+      auto input_num = ShapeProduction(input_shape);
+      CHECK(input_num == input_data.size()) << "input size error";
+      std::memcpy(
+          input_data_ptr, input_data.data(), sizeof(int64_t) * input_num);
+
+      LOG(INFO) << "input data:" << input_data_ptr[0] << " "
+                << input_data_ptr[input_num - 1];
     }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
   }
 
   // warmup
@@ -184,23 +215,17 @@ void Run(const std::vector<int64_t>& input_shape,
     auto out_tensor = predictor->GetOutput(0);
     auto* out_data = out_tensor->data<float>();
     int64_t output_num = ShapeProduction(out_tensor->shape());
-    float max_value = out_data[0];
-    int max_index = 0;
-    for (int i = 0; i < output_num; i++) {
-      if (max_value < out_data[i]) {
-        max_value = out_data[i];
-        max_index = i;
-      }
+
+    LOG(INFO) << "output shape:";
+    for (auto i : out_tensor->shape()) {
+      LOG(INFO) << i;
     }
-    LOG(INFO) << "max_value:" << max_value;
-    LOG(INFO) << "max_index:" << max_index;
-    LOG(INFO) << "output data[0:10]:";
-    for (int i = 0; i < 10; i++) {
+    LOG(INFO) << "output data:";
+    for (int i = 0; i < output_num; i++) {
       LOG(INFO) << out_data[i];
     }
   }
 }
-#endif
 
 }  // namespace lite_api
 }  // namespace paddle

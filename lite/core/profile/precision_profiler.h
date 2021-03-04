@@ -254,6 +254,7 @@ class PrecisionProfiler {
 
     if (target_type == TARGET(kARM) || target_type == TARGET(kHost) ||
         target_type == TARGET(kX86)) {
+      LOG(INFO) << "precision:" << PrecisionToStr(precision_type);
       switch (precision_type) {
         case PRECISION(kFloat): {
           auto ptr = in->data<float>();

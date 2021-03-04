@@ -264,6 +264,7 @@ void RuntimeProgram::Run() {
   auto inst_precision_profiler = paddle::lite::profile::PrecisionProfiler();
   std::string precision_profiler_summary =
       inst_precision_profiler.GetSummaryHeader();
+  LOG(INFO) << precision_profiler_summary;
 #endif
 
 #ifdef LITE_WITH_NVTX
@@ -299,8 +300,9 @@ void RuntimeProgram::Run() {
 
 #ifdef LITE_WITH_PRECISION_PROFILE
 #ifndef LITE_WITH_FPGA
-    precision_profiler_summary +=
-        inst_precision_profiler.GetInstPrecision(&inst);
+    if (inst.op()->Type() != "while") {
+      LOG(INFO) << inst_precision_profiler.GetInstPrecision(&inst);
+    }
 #endif
 #endif  // LITE_WITH_PRECISION_PROFILE
   }
@@ -308,12 +310,14 @@ void RuntimeProgram::Run() {
   CLRuntime::Global()->SaveProgram();
 #endif
 #ifdef LITE_WITH_PROFILE
-  LOG(INFO) << "\n" << profiler_.Summary(profile::Type::kDispatch, false, 1);
+// LOG(INFO) << "\n" << profiler_.Summary(profile::Type::kDispatch, false, 1);
 #endif
 #ifdef LITE_WITH_PRECISION_PROFILE
-  LOG(INFO) << "\n"
-            << precision_profiler_summary
-            << inst_precision_profiler.GetSummaryTail();
+/*
+LOG(INFO) << "\n"
+          << precision_profiler_summary
+          << inst_precision_profiler.GetSummaryTail();
+*/
 #endif
 }
 
@@ -461,6 +465,7 @@ void Program::PrepareWorkspace(
 }
 
 void Instruction::Run() {
+  LOG(INFO) << "------ start";
 #ifdef LITE_WITH_PROFILE
   CHECK(profiler_) << "Profiler pointer of kernel can not be nullptr. "
                       "When LITE_WITH_PROFILE is defined, please set a "
@@ -470,19 +475,25 @@ void Instruction::Run() {
 #endif
   CHECK(op_) << "op null";
   CHECK(kernel_) << "kernel null";
+  LOG(INFO) << op_->Type();
 
   if (first_epoch_) {
     first_epoch_ = false;
+    LOG(INFO) << "CheckShape";
     CHECK(op_->CheckShape());
   }
 
   if (op_->run_once() && has_run_) {
     return;
   }
-
+  LOG(INFO) << "InferShape";
   op_->InferShape();
+
+  LOG(INFO) << "Launch " << op_->Type();
   kernel_->Launch();
   has_run_ = true;
+
+  LOG(INFO) << "Profile " << op_->Type();
 
 #ifdef LITE_WITH_PROFILE
   if (first_epoch_for_profiler_) {
@@ -491,6 +502,7 @@ void Instruction::Run() {
     first_epoch_for_profiler_ = false;
   }
 #endif
+  LOG(INFO) << "------ end";
 }
 
 STL::ostream& operator<<(STL::ostream& os, const Instruction& other) {
