@@ -19,7 +19,9 @@
 #include "lite/backends/x86/port.h"
 #endif
 #define GLOG_NO_ABBREVIATED_SEVERITIES  // msvc conflict logging with windows.h
+#include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -32,9 +34,6 @@
 #include "lite/utils/cp_logging.h"
 #include "lite/utils/string.h"
 
-DEFINE_string(optimized_model_path,
-              "",
-              "the path of the model that is optimized by opt.");
 DEFINE_string(model_dir,
               "",
               "the path of the model, the model and param files is under "
@@ -47,15 +46,18 @@ DEFINE_string(params_filename,
               "",
               "the filename of param file, set param_file when the model is "
               "combined formate.");
+DEFINE_string(optimized_model_path,
+              "",
+              "the path of the model that is optimized by opt.");
 DEFINE_string(input_shape,
               "1,3,224,224",
               "set input shapes according to the model, "
               "separated by colon and comma, "
               "such as 1,3,244,244");
-DEFINE_string(input_img_path,
+DEFINE_string(input_data_path,
               "",
               "the path of input image, if not set "
-              "input_img_path, the input of model will be 1.0.");
+              "input_data_path, the input of model will be 1.0.");
 DEFINE_int32(warmup, 0, "warmup times");
 DEFINE_int32(repeats, 1, "repeats times");
 DEFINE_int32(power_mode,
@@ -66,7 +68,7 @@ DEFINE_int32(power_mode,
              "2 for all cores, "
              "3 for no bind");
 DEFINE_int32(threads, 1, "threads num");
-DEFINE_string(result_filename,
+DEFINE_string(result_path,
               "result.txt",
               "save the inference time to the file.");
 DEFINE_bool(show_output, false, "Wether to show the output in shell.");
@@ -78,6 +80,70 @@ inline double GetCurrentUS() {
   struct timeval time;
   gettimeofday(&time, NULL);
   return 1e+6 * time.tv_sec + time.tv_usec;
+}
+
+int64_t ShapeProduction(const std::vector<int64_t>& shape) {
+  int64_t num = 1;
+  for (auto i : shape) {
+    num *= i;
+  }
+  return num;
+}
+
+int DumpCurrentMemoryUsage() {
+  int pid = static_cast<int>(getpid());
+  std::string command = "pmap -x " + std::to_string(pid) + " | grep total";
+
+  FILE* pp = popen(command.data(), "r");
+  if (!pp) {
+    LOG(FATAL) << "dump memorage usage failed.";
+  }
+
+  char tmp[1024];
+  fgets(tmp, sizeof(tmp), pp);
+  pclose(pp);
+
+  std::string info(tmp);
+  std::string nums = "0123456789";
+  auto pos_left = info.find_first_of(nums);
+  auto pos_right = info.find_first_not_of(nums, pos_left);
+  std::string res = info.substr(pos_left, pos_right);
+
+  return atoi(res.c_str());
+}
+
+void print_usage() {
+  std::string help_info =
+      "Usage: \n"
+      "./benchmark_bin \n"
+      "  --optimized_model_path (The path of the model that is optimized\n"
+      "    by opt. If the model is optimized, please set the param.) \n"
+      "    type: string \n"
+      "  --model_dir (The path of the model that is not optimized by opt,\n"
+      "    the model and param files is under model_dir.) type: string \n"
+      "  --model_filename (The filename of model file. When the model is\n "
+      "    combined formate, please set model_file. Otherwise, it is not\n"
+      "    necessary to set it.) type: string \n"
+      "  --params_filename (The filename of param file, set param_file when\n"
+      "    the model is combined formate. Otherwise, it is not necessary\n"
+      "    to set it.) type: string \n"
+      "  --input_shape (Set input shapes according to the model, separated by\n"
+      "    colon and comma, such as 1,3,244,244) type: string\n"
+      "    default: 1,3,224,224 \n"
+      "  --input_data_path (The path of input image, if not set\n"
+      "    input_data_path, the input will be 1.0.) type: string \n "
+      "  --power_mode (Arm power mode: 0 for big cluster, 1 for little\n"
+      "    cluster, 2 for all cores, 3 for no bind) type: int32 default: 3\n"
+      "  --repeats (Repeats times) type: int32 default: 1 \n"
+      "  --result_path (Save the inference time to the file.) type: \n"
+      "    string default: result.txt \n"
+      "  --threads (Threads num) type: int32 default: 1 \n"
+      "  --warmup (Warmup times) type: int32 default: 0 \n"
+      "Note that: \n"
+      "  If load the optimized model, set optimized_model_path. Otherwise, \n"
+      "    set model_dir, model_filename and params_filename according to \n"
+      "    the model. \n";
+  LOG(INFO) << help_info;
 }
 
 void OutputOptModel(const std::string& save_optimized_model_dir) {
@@ -107,15 +173,6 @@ void OutputOptModel(const std::string& save_optimized_model_dir) {
   LOG(INFO) << "Save optimized model to " << save_optimized_model_dir;
 }
 
-int64_t ShapeProduction(const std::vector<int64_t>& shape) {
-  int64_t num = 1;
-  for (auto i : shape) {
-    num *= i;
-  }
-  return num;
-}
-
-#ifdef LITE_WITH_LIGHT_WEIGHT_FRAMEWORK
 void Run(const std::vector<int64_t>& input_shape,
          const std::string& model_path,
          const std::string model_name) {
@@ -132,20 +189,18 @@ void Run(const std::vector<int64_t>& input_shape,
   input_tensor->Resize(input_shape);
   auto input_data = input_tensor->mutable_data<float>();
   int64_t input_num = ShapeProduction(input_shape);
-  if (FLAGS_input_img_path.empty()) {
+  if (FLAGS_input_data_path.empty()) {
     for (int i = 0; i < input_num; ++i) {
       input_data[i] = 1.f;
     }
   } else {
-    std::fstream fs(FLAGS_input_img_path);
+    std::fstream fs(FLAGS_input_data_path);
     if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_img_path << " error.";
+      LOG(FATAL) << "open input image " << FLAGS_input_data_path << " error.";
     }
     for (int i = 0; i < input_num; i++) {
       fs >> input_data[i];
     }
-    // LOG(INFO) << "input data:" << input_data[0] << " " <<
-    // input_data[input_num-1];
   }
 
   // warmup
@@ -155,31 +210,34 @@ void Run(const std::vector<int64_t>& input_shape,
 
   // run
   std::vector<float> perf_vct;
+  std::vector<int> mem_vct;
   for (int i = 0; i < FLAGS_repeats; ++i) {
+    int mem_usage = DumpCurrentMemoryUsage();
+    mem_vct.push_back(mem_usage);
+
     auto start = GetCurrentUS();
     predictor->Run();
     auto end = GetCurrentUS();
     perf_vct.push_back((end - start) / 1000.0);
   }
-  std::stable_sort(perf_vct.begin(), perf_vct.end());
-  float min_res = perf_vct.back();
-  float max_res = perf_vct.front();
-  float total_res = accumulate(perf_vct.begin(), perf_vct.end(), 0.0);
-  float avg_res = total_res / FLAGS_repeats;
 
-  // save result
-  std::ofstream ofs(FLAGS_result_filename, std::ios::app);
+  std::stable_sort(perf_vct.begin(), perf_vct.end());
+
+  // save info
+  std::ofstream ofs(FLAGS_result_path, std::ios::app);
   if (!ofs.is_open()) {
     LOG(FATAL) << "open result file failed";
   }
   ofs.precision(5);
   ofs << std::setw(30) << std::fixed << std::left << model_name;
-  ofs << "min = " << std::setw(12) << min_res;
-  ofs << "max = " << std::setw(12) << max_res;
-  ofs << "average = " << std::setw(12) << avg_res;
+  ofs << "performance_avg(ms) = " << std::setw(20)
+      << accumulate(perf_vct.begin(), perf_vct.end(), 0.0) / FLAGS_repeats;
+  ofs << "memory_usage_avg(KB) = " << std::setw(20)
+      << accumulate(mem_vct.begin(), mem_vct.end(), 0.0) / FLAGS_repeats;
   ofs << std::endl;
   ofs.close();
 
+  // show output
   if (FLAGS_show_output) {
     auto out_tensor = predictor->GetOutput(0);
     auto* out_data = out_tensor->data<float>();
@@ -194,50 +252,11 @@ void Run(const std::vector<int64_t>& input_shape,
     }
     LOG(INFO) << "max_value:" << max_value;
     LOG(INFO) << "max_index:" << max_index;
-    LOG(INFO) << "output data[0:10]:";
-    for (int i = 0; i < 10; i++) {
-      LOG(INFO) << out_data[i];
-    }
   }
 }
-#endif
 
 }  // namespace lite_api
 }  // namespace paddle
-
-void print_usage() {
-  std::string help_info =
-      "Usage: \n"
-      "./benchmark_bin \n"
-      "  --optimized_model_path (The path of the model that is optimized\n"
-      "    by opt. If the model is optimized, please set the param.) \n"
-      "    type: string \n"
-      "  --model_dir (The path of the model that is not optimized by opt,\n"
-      "    the model and param files is under model_dir.) type: string \n"
-      "  --model_filename (The filename of model file. When the model is\n "
-      "    combined formate, please set model_file. Otherwise, it is not\n"
-      "    necessary to set it.) type: string \n"
-      "  --params_filename (The filename of param file, set param_file when\n"
-      "    the model is combined formate. Otherwise, it is not necessary\n"
-      "    to set it.) type: string \n"
-      "  --input_shape (Set input shapes according to the model, separated by\n"
-      "    colon and comma, such as 1,3,244,244) type: string\n"
-      "    default: 1,3,224,224 \n"
-      "  --input_img_path (The path of input image, if not set\n"
-      "    input_img_path, the input will be 1.0.) type: string \n "
-      "  --power_mode (Arm power mode: 0 for big cluster, 1 for little\n"
-      "    cluster, 2 for all cores, 3 for no bind) type: int32 default: 3\n"
-      "  --repeats (Repeats times) type: int32 default: 1 \n"
-      "  --result_filename (Save the inference time to the file.) type: \n"
-      "    string default: result.txt \n"
-      "  --threads (Threads num) type: int32 default: 1 \n"
-      "  --warmup (Warmup times) type: int32 default: 0 \n"
-      "Note that: \n"
-      "  If load the optimized model, set optimized_model_path. Otherwise, \n"
-      "    set model_dir, model_filename and params_filename according to \n"
-      "    the model. \n";
-  LOG(INFO) << help_info;
-}
 
 int main(int argc, char** argv) {
   // Check inputs
@@ -246,7 +265,7 @@ int main(int argc, char** argv) {
   bool is_origin_model = (FLAGS_model_dir != "");
   if (!is_origin_model && !is_opt_model) {
     LOG(INFO) << "Input error, the model path should not be empty.\n";
-    print_usage();
+    paddle::lite_api::print_usage();
     exit(0);
   }
 
@@ -288,9 +307,8 @@ int main(int argc, char** argv) {
     run_model_path = FLAGS_optimized_model_path;
   }
 
-#ifdef LITE_WITH_LIGHT_WEIGHT_FRAMEWORK
   // Run test
   paddle::lite_api::Run(input_shape, run_model_path, model_name);
-#endif
+
   return 0;
 }
