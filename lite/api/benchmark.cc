@@ -221,7 +221,11 @@ void Run(const std::vector<int64_t>& input_shape,
     perf_vct.push_back((end - start) / 1000.0);
   }
 
-  std::stable_sort(perf_vct.begin(), perf_vct.end());
+  // std::stable_sort(perf_vct.begin(), perf_vct.end());
+  float perf_avg =
+      std::accumulate(perf_vct.begin(), perf_vct.end(), 0.0) / FLAGS_repeats;
+  float mem_avg =
+      std::accumulate(mem_vct.begin(), mem_vct.end(), 0.0) / FLAGS_repeats;
 
   // save info
   std::ofstream ofs(FLAGS_result_path, std::ios::app);
@@ -230,12 +234,14 @@ void Run(const std::vector<int64_t>& input_shape,
   }
   ofs.precision(5);
   ofs << std::setw(30) << std::fixed << std::left << model_name;
-  ofs << "performance_avg(ms) = " << std::setw(20)
-      << accumulate(perf_vct.begin(), perf_vct.end(), 0.0) / FLAGS_repeats;
-  ofs << "memory_usage_avg(KB) = " << std::setw(20)
-      << accumulate(mem_vct.begin(), mem_vct.end(), 0.0) / FLAGS_repeats;
+  ofs << "performance_avg(ms) = " << std::setw(20) << perf_avg;
+  ofs << "memory_usage_avg(KB) = " << std::setw(20) << mem_avg;
   ofs << std::endl;
   ofs.close();
+
+  LOG(INFO) << "model_name:" << model_name
+            << ",performance_avg(ms):" << perf_avg
+            << "memory_usage_avg(KB):" << mem_avg;
 
   // show output
   if (FLAGS_show_output) {
