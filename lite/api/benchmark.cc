@@ -169,7 +169,7 @@ void PrintUsage() {
       "  If load the optimized model, set optimized_model_path. Otherwise, \n"
       "    set model_dir, model_filename and params_filename according to \n"
       "    the fact. \n"
-      "  For example: \n"
+      "For example: \n"
       "     ./benchmark_bin --model_dir=./tmp/ --model_filename=model \n"
       "                     --params_filename=params \n";
 
