@@ -82,12 +82,38 @@ inline double GetCurrentUS() {
   return 1e+6 * time.tv_sec + time.tv_usec;
 }
 
-int64_t ShapeProduction(const std::vector<int64_t>& shape) {
-  int64_t num = 1;
+template <class T>
+T ShapeProduction(const std::vector<T>& shape) {
+  T num = 1;
   for (auto i : shape) {
     num *= i;
   }
   return num;
+}
+
+template <class T>
+std::string Vector2Str(const std::vector<T>& input) {
+  std::stringstream ss;
+  for (auto& i : input) {
+    ss << i << " ";
+  }
+  return ss.str();
+}
+
+std::vector<int64_t> GetInputShape(const std::string& str_shape) {
+  std::vector<int64_t> shape;
+  std::string tmp_str = str_shape;
+  while (!tmp_str.empty()) {
+    int dim = atoi(tmp_str.data());
+    shape.push_back(dim);
+    size_t next_offset = tmp_str.find(",");
+    if (next_offset == std::string::npos) {
+      break;
+    } else {
+      tmp_str = tmp_str.substr(next_offset + 1);
+    }
+  }
+  return shape;
 }
 
 int DumpCurrentMemoryUsage() {
@@ -112,7 +138,7 @@ int DumpCurrentMemoryUsage() {
   return atoi(res.c_str());
 }
 
-void print_usage() {
+void PrintUsage() {
   std::string help_info =
       "Usage: \n"
       "./benchmark_bin \n"
@@ -121,12 +147,12 @@ void print_usage() {
       "    type: string \n"
       "  --model_dir (The path of the model that is not optimized by opt,\n"
       "    the model and param files is under model_dir.) type: string \n"
-      "  --model_filename (The filename of model file. When the model is\n "
-      "    combined formate, please set model_file. Otherwise, it is not\n"
-      "    necessary to set it.) type: string \n"
+      "  --model_filename (The filename of model file. When the model is \n"
+      "    combined formate, please set model_file, such as `xx.pdmodel`. \n"
+      "    Otherwise, it is not necessary to set it.) type: string \n"
       "  --params_filename (The filename of param file, set param_file when\n"
-      "    the model is combined formate. Otherwise, it is not necessary\n"
-      "    to set it.) type: string \n"
+      "    the model is combined formate, such as `xx.pdiparams`. Otherwise, \n"
+      "    it is not necessary to set it.) type: string \n"
       "  --input_shape (Set input shapes according to the model, separated by\n"
       "    colon and comma, such as 1,3,244,244) type: string\n"
       "    default: 1,3,224,224 \n"
@@ -142,7 +168,11 @@ void print_usage() {
       "Note that: \n"
       "  If load the optimized model, set optimized_model_path. Otherwise, \n"
       "    set model_dir, model_filename and params_filename according to \n"
-      "    the model. \n";
+      "    the fact. \n"
+      "  For example: \n"
+      "     ./benchmark_bin --model_dir=./tmp/ --model_filename=model \n"
+      "                     --params_filename=params \n";
+
   LOG(INFO) << help_info;
 }
 
@@ -173,13 +203,21 @@ void OutputOptModel(const std::string& save_optimized_model_dir) {
   LOG(INFO) << "Save optimized model to " << save_optimized_model_dir;
 }
 
-void Run(const std::vector<int64_t>& input_shape,
-         const std::string& model_path,
-         const std::string model_name) {
+void Run(const std::string& model_path,
+         const std::string model_name,
+         const std::vector<int64_t>& input_shape) {
+  int threads = FLAGS_threads;
+  int power_mode = FLAGS_power_mode;
+  std::string input_data_path = FLAGS_input_data_path;
+  int warmup = FLAGS_warmup;
+  int repeats = FLAGS_repeats;
+  std::string result_path = FLAGS_result_path;
+  bool show_output = FLAGS_show_output;
+
   // set config and create predictor
   lite_api::MobileConfig config;
-  config.set_threads(FLAGS_threads);
-  config.set_power_mode(static_cast<PowerMode>(FLAGS_power_mode));
+  config.set_threads(threads);
+  config.set_power_mode(static_cast<PowerMode>(power_mode));
   config.set_model_from_file(model_path);
 
   auto predictor = lite_api::CreatePaddlePredictor(config);
@@ -189,14 +227,14 @@ void Run(const std::vector<int64_t>& input_shape,
   input_tensor->Resize(input_shape);
   auto input_data = input_tensor->mutable_data<float>();
   int64_t input_num = ShapeProduction(input_shape);
-  if (FLAGS_input_data_path.empty()) {
+  if (input_data_path.empty()) {
     for (int i = 0; i < input_num; ++i) {
       input_data[i] = 1.f;
     }
   } else {
-    std::fstream fs(FLAGS_input_data_path);
+    std::fstream fs(input_data_path);
     if (!fs.is_open()) {
-      LOG(FATAL) << "open input image " << FLAGS_input_data_path << " error.";
+      LOG(FATAL) << "open input image " << input_data_path << " error.";
     }
     for (int i = 0; i < input_num; i++) {
       fs >> input_data[i];
@@ -204,14 +242,14 @@ void Run(const std::vector<int64_t>& input_shape,
   }
 
   // warmup
-  for (int i = 0; i < FLAGS_warmup; ++i) {
+  for (int i = 0; i < warmup; ++i) {
     predictor->Run();
   }
 
   // run
   std::vector<float> perf_vct;
   std::vector<int> mem_vct;
-  for (int i = 0; i < FLAGS_repeats; ++i) {
+  for (int i = 0; i < repeats; ++i) {
     int mem_usage = DumpCurrentMemoryUsage();
     mem_vct.push_back(mem_usage);
 
@@ -221,14 +259,13 @@ void Run(const std::vector<int64_t>& input_shape,
     perf_vct.push_back((end - start) / 1000.0);
   }
 
-  // std::stable_sort(perf_vct.begin(), perf_vct.end());
   float perf_avg =
-      std::accumulate(perf_vct.begin(), perf_vct.end(), 0.0) / FLAGS_repeats;
+      std::accumulate(perf_vct.begin(), perf_vct.end(), 0.0) / repeats;
   float mem_avg =
-      std::accumulate(mem_vct.begin(), mem_vct.end(), 0.0) / FLAGS_repeats;
+      std::accumulate(mem_vct.begin(), mem_vct.end(), 0.0) / repeats;
 
   // save info
-  std::ofstream ofs(FLAGS_result_path, std::ios::app);
+  std::ofstream ofs(result_path, std::ios::app);
   if (!ofs.is_open()) {
     LOG(FATAL) << "open result file failed";
   }
@@ -239,26 +276,28 @@ void Run(const std::vector<int64_t>& input_shape,
   ofs << std::endl;
   ofs.close();
 
-  LOG(INFO) << "model_name:" << model_name
-            << ",performance_avg(ms):" << perf_avg
-            << "memory_usage_avg(KB):" << mem_avg;
-
   // show output
-  if (FLAGS_show_output) {
+  if (show_output) {
     auto out_tensor = predictor->GetOutput(0);
     auto* out_data = out_tensor->data<float>();
-    int64_t output_num = ShapeProduction(out_tensor->shape());
-    float max_value = out_data[0];
-    int max_index = 0;
-    for (int i = 0; i < output_num; i++) {
-      if (max_value < out_data[i]) {
-        max_value = out_data[i];
-        max_index = i;
-      }
-    }
-    LOG(INFO) << "max_value:" << max_value;
-    LOG(INFO) << "max_index:" << max_index;
+    int64_t out_num = ShapeProduction(out_tensor->shape());
+    auto max_iter = std::max_element(out_data, out_data + out_num);
+    LOG(INFO) << "max_value:" << *max_iter;
+    LOG(INFO) << "max_index:" << max_iter - out_data;
   }
+
+  LOG(INFO) << "--------Summary information--------";
+  LOG(INFO) << "model path: " << model_path;
+  LOG(INFO) << "model name: " << model_name;
+  LOG(INFO) << "threads: " << threads;
+  LOG(INFO) << "power mode: " << power_mode;
+  LOG(INFO) << "input data path: " << input_data_path;
+  LOG(INFO) << "input shape: " << Vector2Str(input_shape);
+  LOG(INFO) << "warmup: " << warmup;
+  LOG(INFO) << "repeats: " << repeats;
+  LOG(INFO) << "result path: " << result_path;
+  LOG(INFO) << "latency (ms): " << perf_avg;
+  LOG(INFO) << "memory usage(KB): " << mem_avg;
 }
 
 }  // namespace lite_api
@@ -267,31 +306,18 @@ void Run(const std::vector<int64_t>& input_shape,
 int main(int argc, char** argv) {
   // Check inputs
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  bool is_opt_model = (FLAGS_optimized_model_path != "");
-  bool is_origin_model = (FLAGS_model_dir != "");
+
+  bool is_opt_model = FLAGS_optimized_model_path != "";
+  bool is_origin_model = FLAGS_model_dir != "";
   if (!is_origin_model && !is_opt_model) {
     LOG(INFO) << "Input error, the model path should not be empty.\n";
-    paddle::lite_api::print_usage();
+    paddle::lite_api::PrintUsage();
     exit(0);
   }
 
   // Get input shape
-  auto get_shape = [](const std::string& str_shape) -> std::vector<int64_t> {
-    std::vector<int64_t> shape;
-    std::string tmp_str = str_shape;
-    while (!tmp_str.empty()) {
-      int dim = atoi(tmp_str.data());
-      shape.push_back(dim);
-      size_t next_offset = tmp_str.find(",");
-      if (next_offset == std::string::npos) {
-        break;
-      } else {
-        tmp_str = tmp_str.substr(next_offset + 1);
-      }
-    }
-    return shape;
-  };
-  std::vector<int64_t> input_shape = get_shape(FLAGS_input_shape);
+  std::vector<int64_t> input_shape =
+      paddle::lite_api::GetInputShape(FLAGS_input_shape);
 
   // Get model_name and run_model_path
   std::string model_name;
@@ -314,7 +340,7 @@ int main(int argc, char** argv) {
   }
 
   // Run test
-  paddle::lite_api::Run(input_shape, run_model_path, model_name);
+  paddle::lite_api::Run(run_model_path, model_name, input_shape);
 
   return 0;
 }
