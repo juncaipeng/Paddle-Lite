@@ -94,9 +94,10 @@ T ShapeProduction(const std::vector<T>& shape) {
 template <class T>
 std::string Vector2Str(const std::vector<T>& input) {
   std::stringstream ss;
-  for (auto& i : input) {
-    ss << i << " ";
+  for (int i = 0; i < input.size() - 1; i++) {
+    ss << i << ",";
   }
+  ss << input.back();
   return ss.str();
 }
 
@@ -287,17 +288,17 @@ void Run(const std::string& model_path,
   }
 
   LOG(INFO) << "--------Summary information--------";
-  LOG(INFO) << "model path: " << model_path;
-  LOG(INFO) << "model name: " << model_name;
+  LOG(INFO) << "model_path: " << model_path;
+  LOG(INFO) << "model_name: " << model_name;
   LOG(INFO) << "threads: " << threads;
-  LOG(INFO) << "power mode: " << power_mode;
-  LOG(INFO) << "input data path: " << input_data_path;
-  LOG(INFO) << "input shape: " << Vector2Str(input_shape);
+  LOG(INFO) << "power_mode: " << power_mode;
+  LOG(INFO) << "input_data_path: " << input_data_path;
+  LOG(INFO) << "input_shape: " << Vector2Str(input_shape);
   LOG(INFO) << "warmup: " << warmup;
   LOG(INFO) << "repeats: " << repeats;
-  LOG(INFO) << "result path: " << result_path;
-  LOG(INFO) << "latency (ms): " << perf_avg;
-  LOG(INFO) << "memory usage(KB): " << mem_avg;
+  LOG(INFO) << "result_path: " << result_path;
+  LOG(INFO) << "latency(ms): " << perf_avg;
+  LOG(INFO) << "memory_usage(KB): " << mem_avg;
 }
 
 }  // namespace lite_api
