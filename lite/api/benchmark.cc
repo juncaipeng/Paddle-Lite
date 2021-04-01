@@ -95,7 +95,7 @@ template <class T>
 std::string Vector2Str(const std::vector<T>& input) {
   std::stringstream ss;
   for (int i = 0; i < input.size() - 1; i++) {
-    ss << i << ",";
+    ss << input[i] << ",";
   }
   ss << input.back();
   return ss.str();
